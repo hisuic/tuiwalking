@@ -1,3 +1,5 @@
+mod frames;
+
 use std::io;
 
 use crossterm::{
