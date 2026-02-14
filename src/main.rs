@@ -1,39 +1,84 @@
 mod frames;
 
 use std::io;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{self, Event, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Layout},
+    style::{Color, Style},
+    widgets::Paragraph,
+    Terminal,
+};
+
+const TICK_RATE: Duration = Duration::from_millis(200);
 
 fn main() -> io::Result<()> {
-    // Terminal setup
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
-    // Main loop
+    let mut frame_index: usize = 0;
+    let mut last_tick = Instant::now();
+    let mut x_pos: u16 = 0;
+
     loop {
-        terminal.draw(|frame| {
-            let area = frame.area();
-            frame.render_widget(
-                ratatui::widgets::Paragraph::new("Press 'q' to quit"),
-                area,
-            );
+        terminal.draw(|f| {
+            let area = f.area();
+
+            let chunks = Layout::vertical([
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(area);
+
+            // Build the walking frame with horizontal offset
+            let art = frames::FRAMES[frame_index];
+            let padding = " ".repeat(x_pos as usize);
+            let shifted: String = art
+                .lines()
+                .map(|line| format!("{}{}", padding, line))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let walker = Paragraph::new(shifted)
+                .style(Style::default().fg(Color::Green));
+            f.render_widget(walker, chunks[0]);
+
+            let help = Paragraph::new("Press 'q' to quit")
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(help, chunks[1]);
         })?;
 
-        if let Event::Key(key) = event::read()? {
-            if key.code == KeyCode::Char('q') {
-                break;
+        // Non-blocking event poll with tick rate
+        let timeout = TICK_RATE
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or(Duration::ZERO);
+
+        if event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::Char('q') {
+                    break;
+                }
             }
+        }
+
+        // Advance animation on each tick
+        if last_tick.elapsed() >= TICK_RATE {
+            frame_index = (frame_index + 1) % frames::FRAMES.len();
+            let max_x = terminal.size()?.width.saturating_sub(10);
+            x_pos = (x_pos + 1) % max_x.max(1);
+            last_tick = Instant::now();
         }
     }
 
-    // Terminal teardown
     disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
     Ok(())
