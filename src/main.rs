@@ -18,12 +18,20 @@ use ratatui::{
 
 const TICK_RATE: Duration = Duration::from_millis(200);
 
-fn main() -> io::Result<()> {
+fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend)?;
+    Terminal::new(backend)
+}
 
+fn restore_terminal() -> io::Result<()> {
+    disable_raw_mode()?;
+    io::stdout().execute(LeaveAlternateScreen)?;
+    Ok(())
+}
+
+fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     let mut frame_index: usize = 0;
     let mut last_tick = Instant::now();
     let mut x_pos: u16 = 0;
@@ -39,7 +47,6 @@ fn main() -> io::Result<()> {
             ])
             .split(area);
 
-            // Build the walking frame with horizontal offset
             let art = frames::FRAMES[frame_index];
             let padding = " ".repeat(x_pos as usize);
             let shifted: String = art
@@ -52,7 +59,6 @@ fn main() -> io::Result<()> {
                 .style(Style::default().fg(Color::Green));
             f.render_widget(walker, chunks[0]);
 
-            // Ground line
             let ground = Paragraph::new("─".repeat(area.width as usize))
                 .style(Style::default().fg(Color::DarkGray));
             f.render_widget(ground, chunks[1]);
@@ -63,7 +69,6 @@ fn main() -> io::Result<()> {
             f.render_widget(help, chunks[2]);
         })?;
 
-        // Non-blocking event poll with tick rate
         let timeout = TICK_RATE
             .checked_sub(last_tick.elapsed())
             .unwrap_or(Duration::ZERO);
@@ -71,12 +76,11 @@ fn main() -> io::Result<()> {
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
                 if key.code == KeyCode::Char('q') {
-                    break;
+                    return Ok(());
                 }
             }
         }
 
-        // Advance animation on each tick
         if last_tick.elapsed() >= TICK_RATE {
             frame_index = (frame_index + 1) % frames::FRAMES.len();
             let max_x = terminal.size()?.width.saturating_sub(10);
@@ -84,8 +88,12 @@ fn main() -> io::Result<()> {
             last_tick = Instant::now();
         }
     }
+}
 
-    disable_raw_mode()?;
-    io::stdout().execute(LeaveAlternateScreen)?;
-    Ok(())
+fn main() -> io::Result<()> {
+    let mut terminal = setup_terminal()?;
+
+    let result = run(&mut terminal);
+    restore_terminal()?;
+    result
 }
