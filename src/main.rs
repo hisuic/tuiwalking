@@ -1,4 +1,5 @@
 mod frames;
+mod scenery;
 
 use std::io;
 use std::time::{Duration, Instant};
