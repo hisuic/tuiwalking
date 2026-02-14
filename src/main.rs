@@ -35,6 +35,7 @@ fn main() -> io::Result<()> {
             let chunks = Layout::vertical([
                 Constraint::Min(1),
                 Constraint::Length(1),
+                Constraint::Length(1),
             ])
             .split(area);
 
@@ -51,10 +52,15 @@ fn main() -> io::Result<()> {
                 .style(Style::default().fg(Color::Green));
             f.render_widget(walker, chunks[0]);
 
+            // Ground line
+            let ground = Paragraph::new("─".repeat(area.width as usize))
+                .style(Style::default().fg(Color::DarkGray));
+            f.render_widget(ground, chunks[1]);
+
             let help = Paragraph::new("Press 'q' to quit")
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(Color::DarkGray));
-            f.render_widget(help, chunks[1]);
+            f.render_widget(help, chunks[2]);
         })?;
 
         // Non-blocking event poll with tick rate
