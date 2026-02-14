@@ -11,13 +11,21 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Layout},
-    style::{Color, Style},
-    widgets::Paragraph,
+    buffer::Buffer,
+    layout::Rect,
+    style::Color,
+    widgets::Widget,
     Terminal,
 };
 
-const TICK_RATE: Duration = Duration::from_millis(200);
+const TICK_RATE: Duration = Duration::from_millis(150);
+const BG_COLOR: Color = Color::Rgb(15, 20, 60);
+const BUILDING_COLOR: Color = Color::Rgb(50, 55, 80);
+const WINDOW_COLOR: Color = Color::Rgb(220, 200, 100);
+const GROUND_COLOR: Color = Color::Rgb(210, 195, 150);
+const GROUND_DARK: Color = Color::Rgb(180, 165, 120);
+const WALKER_COLOR: Color = Color::Rgb(240, 240, 240);
+const HELP_COLOR: Color = Color::Rgb(100, 100, 130);
 
 fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
@@ -32,42 +40,143 @@ fn restore_terminal() -> io::Result<()> {
     Ok(())
 }
 
+/// Custom widget that composes the full scene.
+struct SceneWidget {
+    frame_index: usize,
+    scroll_offset: usize,
+}
+
+impl Widget for SceneWidget {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let w = area.width as usize;
+        let h = area.height as usize;
+        if h < 4 || w < 20 {
+            return;
+        }
+
+        // Layout: sky+buildings | walker row area | ground (2 rows) | help (1 row)
+        let ground_rows = 2usize;
+        let help_rows = 1usize;
+        let scene_height = h.saturating_sub(ground_rows + help_rows);
+        let walker_lines: Vec<&str> = frames::FRAMES[self.frame_index].lines().collect();
+        let walker_h = walker_lines.len();
+
+        // Buildings fill the sky area
+        let building_area_height = scene_height.saturating_sub(walker_h);
+        let skyline = scenery::render_skyline(
+            w as u16,
+            building_area_height.max(1) as u16,
+            self.scroll_offset,
+        );
+
+        // Fill entire background with dark blue
+        for y in 0..h {
+            for x in 0..w {
+                let cell = &mut buf[(area.x + x as u16, area.y + y as u16)];
+                cell.set_char(' ');
+                cell.set_bg(BG_COLOR);
+                cell.set_fg(Color::White);
+            }
+        }
+
+        // Draw buildings
+        for (row_idx, row_str) in skyline.iter().enumerate() {
+            let y = area.y + row_idx as u16;
+            for (col, ch) in row_str.chars().enumerate() {
+                if col >= w {
+                    break;
+                }
+                let x = area.x + col as u16;
+                if ch != ' ' {
+                    let cell = &mut buf[(x, y)];
+                    let (fg, bg) = match ch {
+                        '▪' | '░' => (WINDOW_COLOR, BUILDING_COLOR),
+                        _ => (BUILDING_COLOR, BUILDING_COLOR),
+                    };
+                    cell.set_char(ch);
+                    cell.set_fg(fg);
+                    cell.set_bg(bg);
+                }
+            }
+        }
+
+        // Draw walker centered horizontally, positioned just above ground
+        let walker_x_start = (w / 2).saturating_sub(frames::FRAME_WIDTH as usize / 2);
+        let walker_y_start = scene_height.saturating_sub(walker_h);
+        for (i, line) in walker_lines.iter().enumerate() {
+            let y = area.y + (walker_y_start + i) as u16;
+            if y >= area.y + area.height {
+                break;
+            }
+            for (j, ch) in line.chars().enumerate() {
+                let x = area.x + (walker_x_start + j) as u16;
+                if x >= area.x + area.width {
+                    break;
+                }
+                if ch != ' ' {
+                    let cell = &mut buf[(x, y)];
+                    cell.set_char(ch);
+                    cell.set_fg(WALKER_COLOR);
+                    // Keep whatever bg was there (building or sky)
+                }
+            }
+        }
+
+        // Draw ground
+        for row in 0..ground_rows {
+            let y = area.y + scene_height as u16 + row as u16;
+            if y >= area.y + area.height {
+                break;
+            }
+            for col in 0..w {
+                let x = area.x + col as u16;
+                let cell = &mut buf[(x, y)];
+                if row == 0 {
+                    // Top ground row - textured
+                    let shifted = (col + self.scroll_offset) % 4;
+                    if shifted == 0 {
+                        cell.set_char('░');
+                        cell.set_fg(GROUND_DARK);
+                        cell.set_bg(GROUND_COLOR);
+                    } else {
+                        cell.set_char(' ');
+                        cell.set_bg(GROUND_COLOR);
+                    }
+                } else {
+                    cell.set_char(' ');
+                    cell.set_bg(GROUND_DARK);
+                }
+            }
+        }
+
+        // Help text at bottom
+        let help = "Press 'q' to quit";
+        let help_y = area.y + area.height - 1;
+        let help_x = (w.saturating_sub(help.len())) / 2;
+        for (i, ch) in help.chars().enumerate() {
+            let x = area.x + (help_x + i) as u16;
+            if x < area.x + area.width {
+                let cell = &mut buf[(x, help_y)];
+                cell.set_char(ch);
+                cell.set_fg(HELP_COLOR);
+                cell.set_bg(BG_COLOR);
+            }
+        }
+    }
+}
+
 fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     let mut frame_index: usize = 0;
     let mut last_tick = Instant::now();
-    let mut x_pos: u16 = 0;
+    let mut scroll_offset: usize = 0;
 
     loop {
+        let fi = frame_index;
+        let so = scroll_offset;
+
         terminal.draw(|f| {
             let area = f.area();
-
-            let chunks = Layout::vertical([
-                Constraint::Min(1),
-                Constraint::Length(1),
-                Constraint::Length(1),
-            ])
-            .split(area);
-
-            let art = frames::FRAMES[frame_index];
-            let padding = " ".repeat(x_pos as usize);
-            let shifted: String = art
-                .lines()
-                .map(|line| format!("{}{}", padding, line))
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            let walker = Paragraph::new(shifted)
-                .style(Style::default().fg(Color::Green));
-            f.render_widget(walker, chunks[0]);
-
-            let ground = Paragraph::new("─".repeat(area.width as usize))
-                .style(Style::default().fg(Color::DarkGray));
-            f.render_widget(ground, chunks[1]);
-
-            let help = Paragraph::new("Press 'q' to quit")
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::DarkGray));
-            f.render_widget(help, chunks[2]);
+            f.render_widget(SceneWidget { frame_index: fi, scroll_offset: so }, area);
         })?;
 
         let timeout = TICK_RATE
@@ -84,8 +193,7 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
 
         if last_tick.elapsed() >= TICK_RATE {
             frame_index = (frame_index + 1) % frames::FRAMES.len();
-            let max_x = terminal.size()?.width.saturating_sub(10);
-            x_pos = (x_pos + 1) % max_x.max(1);
+            scroll_offset = scroll_offset.wrapping_add(1);
             last_tick = Instant::now();
         }
     }
@@ -93,7 +201,6 @@ fn run(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> 
 
 fn main() -> io::Result<()> {
     let mut terminal = setup_terminal()?;
-
     let result = run(&mut terminal);
     restore_terminal()?;
     result

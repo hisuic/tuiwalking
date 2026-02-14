@@ -81,8 +81,5 @@ pub const FRAMES: &[&str] = &[
     ),
 ];
 
-/// Height of each frame in lines.
-pub const FRAME_HEIGHT: u16 = 10;
-
 /// Width of each frame in columns.
 pub const FRAME_WIDTH: u16 = 12;
